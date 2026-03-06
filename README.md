@@ -14,7 +14,7 @@ which jointly jointly approximate posterior sampling and solve linear inverse pr
 
 A visual example for the solution path of Flower for box inpainting:
 
-<img src="flower_demo/batch001_grid.png" scale=0.6/>
+<img src="flower_demo/31c13cdf-40d8-4567-a913-ca014191a198.jpeg" scale=0.6/>
 
 ## 1. Getting started
 To get started, clone the repository and create the conda environment:
