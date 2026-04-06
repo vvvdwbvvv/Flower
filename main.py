@@ -189,6 +189,17 @@ def main():
             degradation = GaussianDeblurring(
                 sigma_blur, kernel_size, "fft", args.num_channels, args.dim_image, device)
 
+        elif args.problem == "motion_deblurring_FFT":
+            if args.noise_type == 'laplace':
+                sigma_noise = 0.3
+            elif args.noise_type == 'gaussian':
+                sigma_noise = 0.05
+
+            kernel_size = getattr(args, "motion_kernel_size", 61)
+            angle = getattr(args, "motion_angle", 0.0)
+            degradation = MotionDeblurring(
+                kernel_size, angle, "fft", args.num_channels, args.dim_image, device)
+
         print('Solving the {} inverse problem with the method {}...'.format(
             args.problem, args.method))
         print('sigma_noise', sigma_noise)

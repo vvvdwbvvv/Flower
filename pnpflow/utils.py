@@ -401,24 +401,25 @@ def save_samples(samples, train_samples, path, args):
     samples = samples.clone().permute(0, 2, 3, 1).cpu().data.numpy()
     train_samples = train_samples.clone().permute(0, 2, 3, 1).cpu().data.numpy()
     batch_samples_size = samples.shape[0]
-    cols = int(math.sqrt(batch_samples_size))  # Number of columns
-    rows = int(batch_samples_size / cols)   # Number of rows
-    fig, ax = plt.subplots(rows, 2 * cols, figsize=(20, 20))
-    for i in range(rows):
-        for j in range(cols):
+    cols = max(1, math.ceil(math.sqrt(batch_samples_size)))
+    rows = max(1, math.ceil(batch_samples_size / cols))
+    fig, ax = plt.subplots(rows, 2 * cols, figsize=(20, 20), squeeze=False)
+    for idx, ax_ in enumerate(ax[:, :cols].flat):
+        if idx < batch_samples_size:
             if args.num_channels == 1:
-                ax[i, j].imshow(samples[i + j * rows].squeeze(-1),
-                                cmap='gray', vmin=0, vmax=1)
+                ax_.imshow(samples[idx].squeeze(-1), cmap='gray', vmin=0, vmax=1)
             else:
-                ax[i, j].imshow(samples[i + j * rows])
-    for i in range(rows):
-        for j in range(cols, 2*cols+1):
-            if i+(j - cols)*rows < train_samples.shape[0]:
-                if args.num_channels == 1:
-                    ax[i, j].imshow(train_samples[i+(j - cols)*rows].squeeze(-1),
-                                    cmap='gray', vmin=0, vmax=1)
-                else:
-                    ax[i, j].imshow(train_samples[i+(j - cols)*rows])
+                ax_.imshow(samples[idx])
+        else:
+            ax_.axis('off')
+    for idx, ax_ in enumerate(ax[:, cols:].flat):
+        if idx < train_samples.shape[0]:
+            if args.num_channels == 1:
+                ax_.imshow(train_samples[idx].squeeze(-1), cmap='gray', vmin=0, vmax=1)
+            else:
+                ax_.imshow(train_samples[idx])
+        else:
+            ax_.axis('off')
     ax[0, 0].set_title("Model samples")
     ax[0, cols].set_title("Training samples")
 
@@ -440,38 +441,27 @@ def save_images(clean_img, noisy_img, rec_img, args, H_adj, iter='final'):
     # save images all together
     batch_size = clean_img.shape[0]
 
-    cols = int(math.sqrt(batch_size))  # Number of columns
-    rows = int(batch_size / cols)   # Number of rows
+    cols = max(1, math.ceil(math.sqrt(batch_size)))
+    rows = max(1, math.ceil(batch_size / cols))
 
-    clean_img = clean_img.permute(0, 2, 3, 1).cpu().data.numpy()
-    noisy_img = noisy_img.permute(0, 2, 3, 1).cpu().data.numpy()
-    rec_img = rec_img.permute(0, 2, 3, 1).cpu().data.numpy()
-    H_adj_noisy_img = H_adj_noisy_img.permute(0, 2, 3, 1).cpu().data.numpy()
+    clean_img = np.clip(clean_img.permute(0, 2, 3, 1).cpu().data.numpy(), 0.0, 1.0)
+    noisy_img = np.clip(noisy_img.permute(0, 2, 3, 1).cpu().data.numpy(), 0.0, 1.0)
+    rec_img = np.clip(rec_img.permute(0, 2, 3, 1).cpu().data.numpy(), 0.0, 1.0)
+    H_adj_noisy_img = np.clip(H_adj_noisy_img.permute(0, 2, 3, 1).cpu().data.numpy(), 0.0, 1.0)
 
     if iter != 'final':
-        if batch_size == 1:
-            fig = plt.figure()
-            plt.imshow(rec_img[0])
-        elif batch_size == 2:
-            fig, ax = plt.subplots(1, 2)
-            ax[0].imshow(rec_img[0])
-            ax[1].imshow(rec_img[1])
-            for ax_ in ax.flatten():
-                ax_.set_xticks([])
-                ax_.set_yticks([])
-        else:
-            fig, ax = plt.subplots(rows, cols, figsize=(20, 20))
-            for i in range(rows):
-                for j in range(cols):
-                    if args.num_channels == 1:
-                        ax[i, j].imshow(rec_img[i + j * rows].squeeze(-1),
-                                        cmap='gray', vmin=0, vmax=1)
-                    else:
-                        ax[i, j].imshow(rec_img[i + j * rows])
+        fig, ax = plt.subplots(rows, cols, figsize=(20, 20), squeeze=False)
+        for idx, ax_ in enumerate(ax.flat):
+            if idx < batch_size:
+                if args.num_channels == 1:
+                    ax_.imshow(rec_img[idx].squeeze(-1), cmap='gray', vmin=0, vmax=1)
+                else:
+                    ax_.imshow(rec_img[idx])
+            else:
+                ax_.axis('off')
 
-            for ax_ in ax.flatten():
-                ax_.set_xticks([])
-                ax_.set_yticks([])
+            ax_.set_xticks([])
+            ax_.set_yticks([])
 
         plt.savefig(os.path.join(args.save_path_ip,
                     f"{args.problem}_{args.method}_batch{args.batch}_iter{iter}.png")),
@@ -481,26 +471,18 @@ def save_images(clean_img, noisy_img, rec_img, args, H_adj, iter='final'):
     if iter == 'final':
         for k, img in enumerate([clean_img, noisy_img, rec_img]):
 
-            if batch_size == 1:
-                fig = plt.figure()
-                plt.imshow(img[0])
-            elif batch_size == 2:
-                fig, ax = plt.subplots(1, 2)
-                ax[0].imshow(img[0])
-                ax[1].imshow(img[1])
-            else:
-                fig, ax = plt.subplots(rows, cols, figsize=(20, 20))
-                for i in range(rows):
-                    for j in range(cols):
-                        if args.num_channels == 1:
-                            ax[i, j].imshow(img[i + j * rows].squeeze(-1),
-                                            cmap='gray', vmin=0, vmax=1)
-                        else:
-                            ax[i, j].imshow(img[i + j * rows])
+            fig, ax = plt.subplots(rows, cols, figsize=(20, 20), squeeze=False)
+            for idx, ax_ in enumerate(ax.flat):
+                if idx < batch_size:
+                    if args.num_channels == 1:
+                        ax_.imshow(img[idx].squeeze(-1), cmap='gray', vmin=0, vmax=1)
+                    else:
+                        ax_.imshow(img[idx])
+                else:
+                    ax_.axis('off')
 
-                for ax_ in ax.flatten():
-                    ax_.set_xticks([])
-                    ax_.set_yticks([])
+                ax_.set_xticks([])
+                ax_.set_yticks([])
 
             plt.savefig(os.path.join(
                 args.save_path_ip, f"{args.problem}_{list_word[k]}_batch{args.batch}_final.png")),

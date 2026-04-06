@@ -50,7 +50,7 @@ class PNP_DIFF(object):
             elif self.args.problem == 'inpainting' or self.args.problem == 'random_inpainting' or self.args.problem == 'paintbrush_inpainting':
                 data_fidelity = DataFidelity_Inpainting(
                     sigma_noise, H, H_adj, degradation)
-            elif self.args.problem == 'gaussian_deblurring_FFT':
+            elif self.args.problem in ('gaussian_deblurring_FFT', 'motion_deblurring_FFT'):
                 data_fidelity = DataFidelity_GaussianDeblurring(
                     sigma_noise, H, H_adj, degradation)
             elif self.args.problem == 'superresolution':

@@ -106,7 +106,7 @@ class OT_ODE(object):
                             d.flatten(start_dim=2)
                         sol = sol_tmp.reshape(d.shape)
 
-                    elif self.args.problem == "gaussian_deblurring_FFT":
+                    elif self.args.problem in ("gaussian_deblurring_FFT", "motion_deblurring_FFT"):
                         fft_d = torch.fft.fft2(d)
                         kernel = degradation.filter
                         kernel_size = kernel.shape[2]
