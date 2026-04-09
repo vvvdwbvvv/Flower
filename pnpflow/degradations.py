@@ -1,32 +1,9 @@
+import numpy as np
 import torch
 import torch.nn.functional as F
+from PIL import Image, ImageDraw, ImageFilter
+
 from pnpflow.utils import square_mask, random_mask, paintbrush_mask, gaussian_blur, gaussian_2d_kernel, downsample, upsample, bicubic_filter, create_downsampling_matrix
-
-
-def motion_blur_kernel(kernel_size, angle=0.0, device="cpu"):
-    if kernel_size % 2 == 0:
-        raise ValueError("kernel_size must be odd for motion blur.")
-
-    coords = torch.arange(kernel_size, dtype=torch.float32, device=device)
-    yy, xx = torch.meshgrid(coords, coords, indexing="ij")
-    center = (kernel_size - 1) / 2.0
-
-    xx = xx - center
-    yy = yy - center
-
-    theta = torch.tensor(angle * torch.pi / 180.0,
-                         dtype=torch.float32, device=device)
-    direction_x = torch.cos(theta)
-    direction_y = torch.sin(theta)
-
-    along = xx * direction_x + yy * direction_y
-    perp = -xx * direction_y + yy * direction_x
-
-    kernel = ((along.abs() <= center) & (perp.abs() <= 0.5)).float()
-    kernel_sum = kernel.sum()
-    if kernel_sum == 0:
-        raise ValueError("Motion blur kernel is empty. Check kernel_size and angle.")
-    return kernel / kernel_sum
 
 
 class Degradation:
@@ -36,6 +13,126 @@ class Degradation:
 
     def H_adj(self, x):
         raise NotImplementedError()
+
+class BaseDegradation(torch.nn.Module):
+    def __init__(self, noise_std=0.0):
+        super().__init__()
+        self.noise_std = noise_std
+
+    def forward(self, x):
+        x = x + self.noise_std * torch.randn_like(x)
+        return x
+
+    def pseudo_inv(self, y):
+        return y
+
+
+def zero_filler(x, scale):
+    B, C, H, W = x.shape
+    scale = int(scale)
+    H_new, W_new = H * scale, W * scale
+    out = torch.zeros(B, C, H_new, W_new, dtype=x.dtype, device=x.device)
+    out[:, :, ::scale, ::scale] = x
+    return out
+
+
+def softmax(x):
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum()
+
+
+def norm(lst: list) -> float:
+    if not isinstance(lst, list):
+        raise ValueError("Norm takes a list as its argument")
+
+    if lst == []:
+        return 0
+
+    return (sum((i**2 for i in lst)))**0.5
+
+
+def polar2z(r: np.ndarray, theta: np.ndarray) -> np.ndarray:
+    return r * np.exp(1j * theta)
+
+
+class Kernel(object):
+    def __init__(self, size: tuple = (100, 100), intensity: float = 0):
+        if not isinstance(size, tuple):
+            raise ValueError("Size must be TUPLE of 2 positive integers")
+        elif len(size) != 2 or type(size[0]) != type(size[1]) != int:
+            raise ValueError("Size must be tuple of 2 positive INTEGERS")
+        elif size[0] < 0 or size[1] < 0:
+            raise ValueError("Size must be tuple of 2 POSITIVE integers")
+
+        if type(intensity) not in [int, float, np.float32, np.float64]:
+            raise ValueError("Intensity must be a number between 0 and 1")
+        elif intensity < 0 or intensity > 1:
+            raise ValueError("Intensity must be a number between 0 and 1")
+
+        self.SIZE = size
+        self.INTENSITY = float(intensity)
+        self.SIZEx2 = tuple([2 * i for i in size])
+        self.x, self.y = self.SIZEx2
+        self.DIAGONAL = (self.x**2 + self.y**2)**0.5
+        self.kernel_is_generated = False
+
+    def _createPath(self):
+        def getSteps():
+            self.MAX_PATH_LEN = 0.75 * self.DIAGONAL * (np.random.uniform() + np.random.uniform(0, self.INTENSITY**2))
+            steps = []
+            while sum(steps) < self.MAX_PATH_LEN:
+                step = np.random.beta(1, 30) * (1 - self.INTENSITY + 0.1) * self.DIAGONAL
+                if step < self.MAX_PATH_LEN:
+                    steps.append(step)
+            if len(steps) == 0:
+                steps.append(self.DIAGONAL * 0.05)
+            self.NUM_STEPS = len(steps)
+            self.STEPS = np.asarray(steps)
+
+        def getAngles():
+            self.MAX_ANGLE = np.random.uniform(0, self.INTENSITY * np.pi)
+            self.JITTER = np.random.beta(2, 20)
+            angles = [np.random.uniform(low=-self.MAX_ANGLE, high=self.MAX_ANGLE)]
+            while len(angles) < self.NUM_STEPS:
+                angle = np.random.triangular(0, self.INTENSITY * self.MAX_ANGLE, self.MAX_ANGLE + 0.1)
+                if np.random.uniform() < self.JITTER:
+                    angle *= -np.sign(angles[-1])
+                else:
+                    angle *= np.sign(angles[-1])
+                angles.append(angle)
+            self.ANGLES = np.asarray(angles)
+
+        getSteps()
+        getAngles()
+        complex_increments = polar2z(self.STEPS, self.ANGLES)
+        self.path_complex = np.cumsum(complex_increments)
+        self.com_complex = sum(self.path_complex) / self.NUM_STEPS
+        center_of_kernel = (self.x + 1j * self.y) / 2
+        self.path_complex -= self.com_complex
+        self.path_complex *= np.exp(1j * np.random.uniform(0, np.pi))
+        self.path_complex += center_of_kernel
+        self.path = [(i.real, i.imag) for i in self.path_complex]
+
+    def _createKernel(self):
+        if self.kernel_is_generated:
+            return None
+
+        self._createPath()
+        kernel_image = Image.new("RGB", self.SIZEx2)
+        painter = ImageDraw.Draw(kernel_image)
+        painter.line(xy=self.path, width=int(self.DIAGONAL / 150))
+        kernel_image = kernel_image.filter(ImageFilter.GaussianBlur(radius=int(self.DIAGONAL * 0.01)))
+        kernel_image = kernel_image.resize(self.SIZE, resample=Image.LANCZOS)
+        kernel_image = kernel_image.convert("L")
+        self.kernel_image = kernel_image
+        self.kernel_is_generated = True
+
+    @property
+    def kernelMatrix(self) -> np.ndarray:
+        self._createKernel()
+        kernel = np.asarray(self.kernel_image, dtype=np.float32)
+        kernel /= np.sum(kernel)
+        return kernel
 
 
 class Denoising(Degradation):
@@ -115,47 +212,65 @@ class GaussianDeblurring(Degradation):
                 torch.fft.fft2(x.to(self.device)) * torch.conj(torch.fft.fft2(self.filter))))
 
 
-class MotionDeblurring(Degradation):
-    def __init__(self, kernel_size, angle=0.0, mode="fft", num_channels=3, dim_image=128, device="cuda") -> None:
+def _motion_kernel(kernel_size: int, intensity: float, device=None) -> torch.Tensor:
+    kernel = Kernel(size=(kernel_size, kernel_size), intensity=float(np.clip(intensity, 0.0, 1.0))).kernelMatrix
+    return torch.from_numpy(kernel).to(device=device, dtype=torch.float32)
+
+
+class MotionBlur(Degradation):
+    def __init__(
+        self,
+        kernel_size=21,
+        angle=0.0,
+        mode="fft",
+        num_channels=3,
+        dim_image=256,
+        device="cuda",
+        noise_std=0.01,
+        img_size=None,
+    ) -> None:
         super().__init__()
         self.mode = mode
+        # Keep the existing argument name for compatibility with current call sites.
+        self.intensity = float(np.clip(angle, 0.0, 1.0))
         self.kernel_size = kernel_size
-        self.angle = angle
         self.device = device
-        self.kernel = motion_blur_kernel(
-            kernel_size, angle=angle, device=device)
+        self.noise_std = noise_std
+        if img_size is not None:
+            dim_image = img_size
+        self.kernel = _motion_kernel(kernel_size, self.intensity, device=device)
+        self.num_channels = num_channels
+        self.dim_image = dim_image
+        self.filter = self._build_filter(dim_image, device)
 
-        filter = torch.zeros(
-            (1, num_channels) + (dim_image, dim_image), device=device
+    def _build_filter(self, dim_image, device):
+        filter = torch.zeros((1, self.num_channels) + (dim_image, dim_image), device=device)
+        filter[..., : self.kernel_size, : self.kernel_size] = self.kernel.view(1, 1, self.kernel_size, self.kernel_size)
+        return torch.roll(
+            filter, shifts=(-(self.kernel_size - 1) // 2, -(self.kernel_size - 1) // 2), dims=(2, 3)
         )
-        filter[..., : kernel_size, : kernel_size] = self.kernel
-        self.filter = torch.roll(
-            filter, shifts=(-(kernel_size - 1) // 2, -(kernel_size - 1) // 2), dims=(2, 3))
 
-        flipped_kernel = torch.flip(self.kernel, dims=(0, 1))
-        adjoint_filter = torch.zeros(
-            (1, num_channels) + (dim_image, dim_image), device=device
-        )
-        adjoint_filter[..., : kernel_size, : kernel_size] = flipped_kernel
-        self.adjoint_filter = torch.roll(
-            adjoint_filter, shifts=(-(kernel_size - 1) // 2, -(kernel_size - 1) // 2), dims=(2, 3))
+    def _ensure_filter(self, x):
+        dim_image = x.shape[-1]
+        if self.filter.shape[-1] != dim_image or self.filter.device != x.device:
+            self.filter = self._build_filter(dim_image, x.device)
+        return self.filter
 
     def H(self, x):
         if self.mode != "fft":
             kernel = self.kernel.view(1, 1, self.kernel_size, self.kernel_size)
             kernel = kernel.repeat(x.shape[1], 1, 1, 1)
-            return F.conv2d(x, kernel, stride=1, padding='same', groups=x.shape[1])
-        return torch.real(torch.fft.ifft2(
-            torch.fft.fft2(x.to(self.device)) * torch.fft.fft2(self.filter)))
+            return F.conv2d(x, kernel, stride=1, padding="same", groups=x.shape[1])
+        filter = self._ensure_filter(x)
+        return torch.real(torch.fft.ifft2(torch.fft.fft2(x.to(filter.device)) * torch.fft.fft2(filter)))
 
     def H_adj(self, x):
         if self.mode != "fft":
-            kernel = torch.flip(self.kernel, dims=(0, 1)).view(
-                1, 1, self.kernel_size, self.kernel_size)
+            kernel = torch.flip(self.kernel, dims=(0, 1)).view(1, 1, self.kernel_size, self.kernel_size)
             kernel = kernel.repeat(x.shape[1], 1, 1, 1)
-            return F.conv2d(x, kernel, stride=1, padding='same', groups=x.shape[1])
-        return torch.real(torch.fft.ifft2(
-            torch.fft.fft2(x.to(self.device)) * torch.fft.fft2(self.adjoint_filter)))
+            return F.conv2d(x, kernel, stride=1, padding="same", groups=x.shape[1])
+        filter = self._ensure_filter(x)
+        return torch.real(torch.fft.ifft2(torch.fft.fft2(x.to(filter.device)) * torch.conj(torch.fft.fft2(filter))))
 
 
 class Superresolution(Degradation):

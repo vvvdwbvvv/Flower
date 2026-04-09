@@ -8,13 +8,15 @@ batch_size_ip=1
 model=ot         
 method=flower
 # FLOWER 
-problem=denoising
-#python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 100 device cuda:1
-problem=inpainting
-#python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 100 device cuda:1
-problem=gaussian_deblurring_FFT
-#python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 100 device cuda:1
-problem=superresolution
-python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 500 device cuda:1
-problem=random_inpainting
-python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 200 device cuda:1
+# problem=denoising
+# #python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 100 device cuda:1
+# problem=inpainting
+# #python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 100 device cuda:1
+# problem=gaussian_deblurring_FFT
+# #python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 100 device cuda:1
+# problem=superresolution
+# python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 500 device cuda:1
+# problem=random_inpainting
+# python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 200 device cuda:1
+problem="motion_deblur"
+python main.py --opts dataset ${dataset} eval_split ${eval_split} model ${model} problem ${problem} method ${method} num_samples 5 max_batch ${max_batch} batch_size_ip ${batch_size_ip} steps 200 device cuda:0
