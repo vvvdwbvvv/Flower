@@ -39,17 +39,8 @@ class FLOW_PRIORS(object):
             (clean_img, labels) = next(loader)
             self.args.batch = batch
 
-            if self.args.noise_type == 'gaussian':
-                noisy_img = H(clean_img.clone().to(self.device))
-                torch.manual_seed(batch)
-                noisy_img += torch.randn_like(noisy_img) * sigma_noise
-            elif self.args.noise_type == 'laplace':
-                noisy_img = H(clean_img.clone().to(self.device))
-                noise = torch.distributions.laplace.Laplace(
-                    torch.zeros_like(noisy_img), sigma_noise * torch.ones_like(noisy_img)).sample().to(self.device)
-                noisy_img += noise
-            else:
-                raise ValueError('Noise type not supported')
+            noisy_img, _ = utils.make_observation(
+                clean_img, labels, H, sigma_noise, self.args.noise_type, self.device, batch)
 
             clean_img = clean_img.to('cpu')
 

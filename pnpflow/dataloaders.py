@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 import pickle
 import logging
 
+IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp')
+
 
 class DataLoaders:
     def __init__(self, dataset_name, batch_size_train, batch_size_test):
@@ -110,6 +112,37 @@ class DataLoaders:
                 shuffle=True,
                 collate_fn=custom_collate, drop_last=True)
 
+        elif self.dataset_name == 'gopro':
+            transform = v2.Compose([
+                v2.Resize(256),
+                v2.CenterCrop((256, 256)),
+                v2.ToTensor(),
+                v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            ])
+
+            root_dir = os.environ.get('GOPRO_ROOT', './data/gopro')
+            train_dataset = GoProDataset(root_dir, split='train', transform=transform)
+            test_dataset = GoProDataset(root_dir, split='test', transform=transform, paired=True)
+            val_split = 'val' if os.path.isdir(os.path.join(root_dir, 'val')) else 'test'
+            val_dataset = GoProDataset(root_dir, split=val_split, transform=transform, paired=True)
+
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=self.batch_size_train,
+                shuffle=True,
+                collate_fn=custom_collate,
+                drop_last=True)
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=self.batch_size_test,
+                shuffle=False,
+                collate_fn=custom_collate)
+            test_loader = DataLoader(
+                test_dataset,
+                batch_size=self.batch_size_test,
+                shuffle=False,
+                collate_fn=custom_collate)
+
         else:
             raise ValueError("The dataset your entered does not exist")
 
@@ -180,6 +213,104 @@ class CelebAHQDataset(Dataset):
         image = image.float()
 
         return image, 0
+
+
+class GoProDataset(Dataset):
+    """GoPro sharp-only training and paired blur/sharp evaluation dataset."""
+
+    def __init__(self, root_dir, split='train', transform=None, paired=False):
+        self.root_dir = root_dir
+        self.split = split
+        self.transform = transform
+        self.paired = paired
+        split_dir = os.path.join(root_dir, split)
+
+        if not os.path.isdir(split_dir):
+            raise FileNotFoundError(
+                f"GoPro split directory not found: {split_dir}. "
+                "Expected ./data/gopro/{train,test}/... or set GOPRO_ROOT."
+            )
+
+        self.samples = self._collect_pairs(split_dir)
+        if not self.samples:
+            raise RuntimeError(
+                f"No GoPro images found for split '{split}' under {split_dir}."
+            )
+
+    def _list_images(self, directory):
+        if not os.path.isdir(directory):
+            return []
+        files = []
+        for root, _, filenames in os.walk(directory):
+            for filename in filenames:
+                if filename.lower().endswith(IMAGE_EXTENSIONS):
+                    files.append(os.path.join(root, filename))
+        return sorted(files)
+
+    def _relative_key(self, path, base_dir):
+        rel = os.path.relpath(path, base_dir)
+        return os.path.splitext(rel)[0].replace(os.sep, '/')
+
+    def _collect_pairs(self, split_dir):
+        flat_sharp_dir = os.path.join(split_dir, 'sharp')
+        flat_blur_dir = os.path.join(split_dir, 'blur')
+        if os.path.isdir(flat_sharp_dir):
+            return self._pair_from_dirs(flat_sharp_dir, flat_blur_dir)
+
+        samples = []
+        for scene in sorted(os.listdir(split_dir)):
+            scene_dir = os.path.join(split_dir, scene)
+            if not os.path.isdir(scene_dir):
+                continue
+            sharp_dir = os.path.join(scene_dir, 'sharp')
+            blur_dir = os.path.join(scene_dir, 'blur')
+            samples.extend(self._pair_from_dirs(sharp_dir, blur_dir))
+        return samples
+
+    def _pair_from_dirs(self, sharp_dir, blur_dir):
+        sharp_paths = self._list_images(sharp_dir)
+        if not self.paired:
+            return [(path, None) for path in sharp_paths]
+
+        blur_paths = self._list_images(blur_dir)
+        blur_by_key = {
+            self._relative_key(path, blur_dir): path
+            for path in blur_paths
+        }
+
+        samples, missing = [], []
+        for sharp_path in sharp_paths:
+            key = self._relative_key(sharp_path, sharp_dir)
+            blur_path = blur_by_key.get(key)
+            if blur_path is None:
+                missing.append(sharp_path)
+                continue
+            samples.append((sharp_path, blur_path))
+
+        if missing:
+            preview = "\n  ".join(missing[:5])
+            warnings.warn(
+                f"{len(missing)} GoPro sharp images did not have matching blur images. "
+                f"First few:\n  {preview}"
+            )
+        return samples
+
+    def __len__(self):
+        return len(self.samples)
+
+    def _load_image(self, path):
+        image = Image.open(path).convert('RGB')
+        if self.transform:
+            image = self.transform(image)
+        return image.float()
+
+    def __getitem__(self, idx):
+        sharp_path, blur_path = self.samples[idx]
+        sharp = self._load_image(sharp_path)
+        if self.paired:
+            blur = self._load_image(blur_path)
+            return sharp, blur
+        return sharp, 0
 
 
 import os

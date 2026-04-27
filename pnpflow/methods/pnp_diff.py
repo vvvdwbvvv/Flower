@@ -41,8 +41,13 @@ class PNP_DIFF(object):
             else:
                 raise ValueError('Noise type not supported')
 
-            noisy_img = ((physics(clean_img) + 1) / 2).to(self.device)
+            paired_observation = utils.has_paired_observation(clean_img, labels)
+            if paired_observation:
+                noisy_img = ((labels + 1) / 2).to(self.device)
+            else:
+                noisy_img = ((physics(clean_img) + 1) / 2).to(self.device)
 
+            data_fidelity = None
             if self.args.noise_type == 'laplace':
                 data_fidelity = L1()
             elif self.args.problem == 'denoising':
@@ -50,31 +55,35 @@ class PNP_DIFF(object):
             elif self.args.problem == 'inpainting' or self.args.problem == 'random_inpainting' or self.args.problem == 'paintbrush_inpainting':
                 data_fidelity = DataFidelity_Inpainting(
                     sigma_noise, H, H_adj, degradation)
-            elif self.args.problem in ('gaussian_deblurring_FFT', 'motion_deblurring_FFT'):
+            elif self.args.problem in ('gaussian_deblurring_FFT', 'motion_deblurring_FFT', 'motion_deblur'):
                 data_fidelity = DataFidelity_GaussianDeblurring(
                     sigma_noise, H, H_adj, degradation)
             elif self.args.problem == 'superresolution':
                 data_fidelity = DataFidelity_SuperResolution(
                     sigma_noise, H, H_adj, degradation)
+            else:
+                raise ValueError(f"Unsupported problem type for pnp_diff: {self.args.problem}")
 
             model = dinv.sampling.DiffPIR(
                 self.model, data_fidelity=data_fidelity, sigma=sigma_noise, zeta=self.zeta, lambda_=self.lmbda, device=self.device)
             x = 2 * model(noisy_img, physics) - 1
 
-            restored_img = x.detach()
-            noisy_img = 2 * noisy_img - 1
-            utils.save_images(clean_img, noisy_img, restored_img,
-                              self.args, H_adj, iter='final')
-            utils.compute_psnr(clean_img, noisy_img,
-                               restored_img, self.args, H_adj, iter=100)
-            utils.compute_ssim(clean_img, noisy_img,
-                               restored_img, self.args, H_adj, iter=100)
-            utils.compute_lpips(clean_img, noisy_img,
-                                restored_img, self.args, H_adj, iter=100)
+            if self.args.save_results:
+                restored_img = x.detach()
+                noisy_img = 2 * noisy_img - 1
+                utils.save_images(clean_img, noisy_img, restored_img,
+                                  self.args, H_adj, iter='final')
+                utils.compute_psnr(clean_img, noisy_img,
+                                   restored_img, self.args, H_adj, iter=100)
+                utils.compute_ssim(clean_img, noisy_img,
+                                   restored_img, self.args, H_adj, iter=100)
+                utils.compute_lpips(clean_img, noisy_img,
+                                    restored_img, self.args, H_adj, iter=100)
 
-        utils.compute_average_psnr(self.args)
-        utils.compute_average_ssim(self.args)
-        utils.compute_average_lpips(self.args)
+        if self.args.save_results:
+            utils.compute_average_psnr(self.args)
+            utils.compute_average_ssim(self.args)
+            utils.compute_average_lpips(self.args)
 
     def run_method(self, data_loaders, degradation, sigma_noise, H_funcs=None):
 

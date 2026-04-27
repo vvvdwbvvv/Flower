@@ -39,10 +39,8 @@ class OT_ODE(object):
             (clean_img, labels) = next(loader)
             self.args.batch = batch
 
-            noisy_img = H(clean_img.clone().to(
-                self.device))  # .reshape(clean_img.shape)
-            torch.manual_seed(batch)
-            noisy_img += torch.randn_like(noisy_img) * sigma_noise
+            noisy_img, _ = utils.make_observation(
+                clean_img, labels, H, sigma_noise, self.args.noise_type, self.device, batch)
             noisy_img = noisy_img.to(self.device)
             clean_img = clean_img.to('cpu')
 
@@ -106,7 +104,7 @@ class OT_ODE(object):
                             d.flatten(start_dim=2)
                         sol = sol_tmp.reshape(d.shape)
 
-                    elif self.args.problem in ("gaussian_deblurring_FFT", "motion_deblurring_FFT"):
+                    elif self.args.problem in ("gaussian_deblurring_FFT", "motion_deblurring_FFT", "motion_deblur"):
                         fft_d = torch.fft.fft2(d)
                         kernel = degradation.filter
                         kernel_size = kernel.shape[2]

@@ -32,7 +32,7 @@ class PROX_PNP(object):
     def prox_datafit(self, x, y, H, H_adj, degradation=None, alpha=None):
         if self.args.noise_type == 'gaussian' and self.args.problem == "random_inpainting":
             return H(y) - H(x) + x
-        if self.args.noise_type == 'gaussian' and self.args.problem in ("gaussian_deblurring_FFT", "motion_deblurring_FFT"):
+        if self.args.noise_type == 'gaussian' and self.args.problem in ("gaussian_deblurring_FFT", "motion_deblurring_FFT", "motion_deblur"):
             fft_d = torch.fft.fft2(alpha * H_adj(y) + x)
             kernel = degradation.filter
             kernel_size = kernel.shape[2]
@@ -100,16 +100,8 @@ class PROX_PNP(object):
             (clean_img, labels) = next(loader)
             self.args.batch = batch
 
-            noisy_img = H(clean_img.clone().to(self.device))
-            if self.args.noise_type == 'gaussian':
-                torch.manual_seed(batch)
-                noisy_img += torch.randn_like(noisy_img) * sigma_noise
-            elif self.args.noise_type == 'laplace':
-                noise = torch.distributions.laplace.Laplace(
-                    torch.zeros_like(noisy_img), sigma_noise * torch.ones_like(noisy_img)).sample().to(self.device)
-                noisy_img += noise
-            else:
-                raise ValueError('Noise type not supported')
+            noisy_img, _ = utils.make_observation(
+                clean_img, labels, H, sigma_noise, self.args.noise_type, self.device, batch)
 
             noisy_img, clean_img = noisy_img.to(
                 self.device), clean_img.to('cpu')
@@ -155,7 +147,7 @@ class PROX_PNP(object):
                             z = self.prox_datafit(y, noisy_img, H, H_adj)
                             x = z
 
-                    elif self.args.algo == "hqs" and self.args.problem in ("gaussian_deblurring_FFT", "motion_deblurring_FFT"):
+                    elif self.args.algo == "hqs" and self.args.problem in ("gaussian_deblurring_FFT", "motion_deblurring_FFT", "motion_deblur"):
                         sigma_ = (
                             1.8 * sigma_noise * torch.ones(len(x), device=self.device)).squeeze()
 

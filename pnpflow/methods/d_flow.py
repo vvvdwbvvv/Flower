@@ -76,9 +76,8 @@ class D_FLOW(object):
             (clean_img, labels) = next(loader)
             self.args.batch = batch
 
-            noisy_img = H(clean_img.clone().to(self.device))
-            torch.manual_seed(batch)
-            noisy_img += torch.randn_like(noisy_img) * sigma_noise
+            noisy_img, _ = utils.make_observation(
+                clean_img, labels, H, sigma_noise, self.args.noise_type, self.device, batch)
             noisy_img = noisy_img.to(self.device)
             clean_img = clean_img.to('cpu')
 

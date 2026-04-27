@@ -205,6 +205,33 @@ def define_model(args):
         raise Exception("Unknown model!")
 
 
+def has_paired_observation(clean_img, labels):
+    return (
+        torch.is_tensor(labels)
+        and labels.ndim == clean_img.ndim
+        and tuple(labels.shape) == tuple(clean_img.shape)
+    )
+
+
+def make_observation(clean_img, labels, H, sigma_noise, noise_type, device, seed_value):
+    if has_paired_observation(clean_img, labels):
+        return labels.to(device), True
+
+    noisy_img = H(clean_img.clone().to(device))
+    if noise_type == 'gaussian':
+        torch.manual_seed(seed_value)
+        noisy_img += torch.randn_like(noisy_img) * sigma_noise
+    elif noise_type == 'laplace':
+        noise = torch.distributions.laplace.Laplace(
+            torch.zeros_like(noisy_img),
+            sigma_noise * torch.ones_like(noisy_img)
+        ).sample().to(device)
+        noisy_img += noise
+    else:
+        raise ValueError('Noise type not supported')
+    return noisy_img, False
+
+
 def load_model(name_model, model, state, download=False, checkpoint_path=None, dataset=None, device='cuda'):
 
     if name_model == "ot":

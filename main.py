@@ -201,6 +201,9 @@ def main():
                 device=device,
             )
 
+        if args.dataset == "gopro":
+            degradation = Denoising()
+
         print('Solving the {} inverse problem with the method {}...'.format(
             args.problem, args.method))
         print('sigma_noise', sigma_noise)

@@ -35,6 +35,29 @@ bash download_data.sh
 ```
 Note that since the AFHQ-Cat data does not have a test split, we create one when downloading the data.
 
+GoPro is supported as a local dataset but is not downloaded by this script.
+Place it under `./data/gopro` with either flat split folders:
+
+```text
+data/gopro/train/sharp/*.png
+data/gopro/train/blur/*.png
+data/gopro/test/sharp/*.png
+data/gopro/test/blur/*.png
+```
+
+or scene folders:
+
+```text
+data/gopro/train/<scene>/sharp/*.png
+data/gopro/train/<scene>/blur/*.png
+data/gopro/test/<scene>/sharp/*.png
+data/gopro/test/<scene>/blur/*.png
+```
+
+Training uses sharp frames only. Paired GoPro evaluation uses the blur frame as
+the observed image with an identity data term, then reports restoration metrics
+against the sharp frame.
+
 ### 1.2. Download pretrained models
 
 To download all the pretrained model weights, run the command:
@@ -83,6 +106,13 @@ Our comparisons build upon the [PnP-Flow]( https://github.com/annegnx/PnP-Flow) 
 Use the bash scripts in the ```scripts/``` folder.
 
 Visual and numerical results will be saved in the ```results/``` folder.
+
+Example GoPro commands:
+
+```bash
+python main.py --opts dataset gopro train True eval False model ot batch_size_train 12 num_epoch 400 lr 0.0001
+python main.py --opts dataset gopro eval True train False model ot problem denoising method pnp_flow eval_split test max_batch 8 batch_size_ip 4
+```
 
 The available methods are
   - ```flower``` (our method default with $\gamma = 0$)
@@ -137,4 +167,3 @@ which builds upon:
 - [DiffPIR](https://openaccess.thecvf.com/content/CVPR2023W/NTIRE/papers/Zhu_Denoising_Diffusion_Models_for_Plug-and-Play_Image_Restoration_CVPRW_2023_paper.pdf) from the [DeepInv](https://deepinv.github.io/deepinv/stubs/deepinv.sampling.DiffPIR.html#deepinv.sampling.DiffPIR) library
 - The folder ImageGeneration is copied from the [Rectified Flow](https://github.com/gnobitab/RectifiedFlow) repository.
 - We thank Anne Gagneux and Ségolène Martin for their assistance in reproducing PnP-Flow results.
-

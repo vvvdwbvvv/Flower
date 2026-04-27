@@ -10,7 +10,39 @@ from matplotlib import pyplot as plt
 import os
 from torch.optim import Adam
 from torch.optim import lr_scheduler
-from torchmetrics.image import PeakSignalNoiseRatio
+
+
+class RunningPSNR:
+    """Lightweight PSNR accumulator to avoid importing torchmetrics at module load."""
+
+    def __init__(self, data_range=1.0, eps=1e-8):
+        self.data_range = float(data_range)
+        self.eps = float(eps)
+        self.reset()
+
+    def reset(self):
+        self.total = 0.0
+        self.count = 0
+
+    @torch.no_grad()
+    def update(self, preds, target):
+        if preds.shape != target.shape:
+            raise ValueError(
+                f"PSNR expects matching shapes, got {preds.shape} and {target.shape}"
+            )
+
+        dims = tuple(range(1, preds.ndim))
+        mse = torch.mean((preds - target) ** 2, dim=dims)
+        psnr = 10.0 * torch.log10(
+            (self.data_range ** 2) / torch.clamp(mse, min=self.eps)
+        )
+        self.total += psnr.sum().item()
+        self.count += psnr.numel()
+
+    def compute(self):
+        if self.count == 0:
+            return torch.tensor(0.0)
+        return torch.tensor(self.total / self.count)
 
 
 class GRADIENT_STEP_DENOISER(object):
@@ -22,7 +54,7 @@ class GRADIENT_STEP_DENOISER(object):
         self.args = args
         self.lr = args.lr
         self.model = model.to(device)
-        self.psnr = PeakSignalNoiseRatio(data_range=2.0).to(device)
+        self.psnr = RunningPSNR(data_range=2.0)
         self.scheduler_milestones = [300, 600, 900, 1200]
         self.scheduler_gamma = 0.5
         self.jacobian_loss_weight = -1
