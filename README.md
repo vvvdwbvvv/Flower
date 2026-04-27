@@ -29,14 +29,19 @@ This will install all dependencies and the package in editable mode. The environ
 
 ### 1.1. Download data
 
-To download the [CelebA](https://www.kaggle.com/datas/jessicali9530/celeba-data) and [AFHQ-Cat](https://github.com/clovaai/stargan-v2/blob/master/README.md#animal-faces-hq-data-afhq) datas, run the command:
+To download the [CelebA](https://www.kaggle.com/datas/jessicali9530/celeba-data), [AFHQ-Cat](https://github.com/clovaai/stargan-v2/blob/master/README.md#animal-faces-hq-data-afhq), and [GoPro](https://seungjunnah.github.io/Datasets/gopro.html) data, run the command:
 ```bash
 bash download_data.sh
 ```
 Note that since the AFHQ-Cat data does not have a test split, we create one when downloading the data.
 
-GoPro is supported as a local dataset but is not downloaded by this script.
-Place it under `./data/gopro` with either flat split folders:
+The GoPro archive is large. To skip it, run:
+
+```bash
+DOWNLOAD_GOPRO=0 bash download_data.sh
+```
+
+After download, or if you prepare it manually, GoPro should live under `./data/gopro` with either flat split folders:
 
 ```text
 data/gopro/train/sharp/*.png
