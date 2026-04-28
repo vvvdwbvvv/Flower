@@ -120,7 +120,8 @@ class FLOW_MATCHING(object):
             pass
 
         reco = utils.postprocess(self.apply_flow_matching(16), self.args)
-        utils.save_samples(reco.detach().cpu(), x[:16].cpu(), self.save_path + 'results_samplings/' +
+        train_samples = utils.postprocess(x[:16].clone(), self.args)
+        utils.save_samples(reco.detach().cpu(), train_samples.detach().cpu(), self.save_path + 'results_samplings/' +
                            'samplings_ep_{}.pdf'.format(ep), self.args)
 
         # check the plots by saving training samples
