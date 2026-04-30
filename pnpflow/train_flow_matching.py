@@ -24,6 +24,14 @@ from pnpflow.models import InceptionV3
 import pnpflow.fid_score as fs
 from pnpflow.dataloaders import DataLoaders
 import pnpflow.utils as utils
+from pnpflow.training_utils import (
+    autocast_context,
+    checkpoint_path,
+    get_amp_settings,
+    load_training_checkpoint,
+    resolve_resume_checkpoint,
+    save_training_checkpoint,
+)
 
 
 class FLOW_MATCHING(object):
@@ -36,9 +44,13 @@ class FLOW_MATCHING(object):
         self.lr = args.lr
         self.model = model.to(device)
 
-    def train_FM_model(self, train_loader, opt, num_epoch):
-        tq = tqdm(range(num_epoch), desc='loss')
+    def train_FM_model(self, train_loader, opt, num_epoch, start_epoch=0, global_step=0, scaler=None):
+        amp_enabled, amp_dtype, _ = get_amp_settings(self.args, self.device)
+        grad_accum_steps = max(1, int(getattr(self.args, "gradient_accumulation_steps", 1)))
+        checkpoint_interval = max(1, int(getattr(self.args, "checkpoint_interval", 5)))
+        tq = tqdm(range(start_epoch, num_epoch), desc='loss')
         for ep in tq:
+            opt.zero_grad(set_to_none=True)
             for iteration, (x, labels) in enumerate(train_loader):
                 if x.size(0) == 0:
                     continue
@@ -70,11 +82,28 @@ class FLOW_MATCHING(object):
                 x0 = x0[i]
                 x1 = x1[j]'''
                 xt = t1 * x1 + (1 - t1) * x0
-                loss = torch.sum(
-                    (self.model(xt, t1.squeeze()) - (x1 - x0))**2) / x.shape[0]
-                opt.zero_grad()
-                loss.backward()
-                opt.step()
+                with autocast_context(amp_enabled, amp_dtype, self.device):
+                    loss = torch.sum(
+                        (self.model(xt, t1.squeeze()) - (x1 - x0))**2) / x.shape[0]
+
+                loss_to_backward = loss / grad_accum_steps
+                if scaler is not None and scaler.is_enabled():
+                    scaler.scale(loss_to_backward).backward()
+                else:
+                    loss_to_backward.backward()
+
+                should_step = (
+                    (iteration + 1) % grad_accum_steps == 0
+                    or (iteration + 1) == len(train_loader)
+                )
+                if should_step:
+                    if scaler is not None and scaler.is_enabled():
+                        scaler.step(opt)
+                        scaler.update()
+                    else:
+                        opt.step()
+                    opt.zero_grad(set_to_none=True)
+                    global_step += 1
 
                 # save loss in txt file
                 with open(self.save_path + 'loss_training.txt', 'a') as file:
@@ -83,10 +112,20 @@ class FLOW_MATCHING(object):
 
             # save samples, plot them, and compute FID on small dataset
             self.sample_plot(x, ep)
-            if ep % 5 == 0:
-                # save model
+            if (ep + 1) % checkpoint_interval == 0 or (ep + 1) == num_epoch:
+                # save model weights and full training state
                 torch.save(self.model.state_dict(),
-                           self.model_path + 'model_{}.pt'.format(ep))
+                           os.path.join(self.model_path, 'model_{}.pt'.format(ep)))
+                ckpt_path = checkpoint_path(self.model_path, ep)
+                save_training_checkpoint(
+                    ckpt_path,
+                    self.model,
+                    opt,
+                    ep,
+                    global_step,
+                    self.args,
+                    scaler=scaler,
+                )
                 # evaluate FID
                 fid_value = self.compute_fast_fid(2048)
                 with open(self.save_path + 'fid.txt', 'a') as file:
@@ -160,22 +199,19 @@ class FLOW_MATCHING(object):
 
     def train(self, data_loaders):
 
-        self.save_path = self.args.root + \
-            'results/{}/ot/'.format(
-                self.args.dataset)
+        self.save_path = os.path.join(
+            self.args.root, 'results', self.args.dataset, 'ot') + os.sep
         try:
             os.makedirs(self.save_path)
         except BaseException:
             pass
 
-        self.model_path = self.args.root + \
-            'model/{}/ot/'.format(
-                self.args.dataset)
+        self.model_path = os.path.join(
+            self.args.root, 'model', self.args.dataset, 'ot') + os.sep
         try:
             os.makedirs(self.model_path)
         except BaseException:
             pass
-
         # load model
         train_loader = data_loaders['train']
 
@@ -191,13 +227,39 @@ class FLOW_MATCHING(object):
             file.write(f'Number of epochs: {self.args.num_epoch}\n')
             file.write(f'Batch size: {self.args.batch_size_train}\n')
             file.write(f'Learning rate: {self.lr}\n')
+            file.write(f'Checkpoint interval: {getattr(self.args, "checkpoint_interval", 5)}\n')
+            file.write(f'Resume: {getattr(self.args, "resume", False)}\n')
+            file.write(f'AMP: {getattr(self.args, "amp", False)} ({getattr(self.args, "amp_dtype", "none")})\n')
+            file.write(f'Gradient accumulation steps: {getattr(self.args, "gradient_accumulation_steps", 1)}\n')
 
         # start training
         opt = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
-        self.train_FM_model(train_loader, opt, num_epoch=self.args.num_epoch)
+        _, _, scaler = get_amp_settings(self.args, self.device)
+        resume_path = resolve_resume_checkpoint(self.args, self.model_path)
+        start_epoch = 0
+        global_step = 0
+        if resume_path is not None:
+            checkpoint = load_training_checkpoint(
+                resume_path,
+                self.model,
+                optimizer=opt,
+                scaler=scaler,
+                device=self.device,
+            )
+            start_epoch = int(checkpoint.get("epoch", -1)) + 1
+            global_step = int(checkpoint.get("global_step", 0))
+            print(f"Resumed training from {resume_path} at epoch {start_epoch}")
+        self.train_FM_model(
+            train_loader,
+            opt,
+            num_epoch=self.args.num_epoch,
+            start_epoch=start_epoch,
+            global_step=global_step,
+            scaler=scaler,
+        )
 
         # save final model
-        torch.save(self.model.state_dict(), self.model_path + 'model_final_no_ot.pt')
+        torch.save(self.model.state_dict(), os.path.join(self.model_path, 'model_final_no_ot.pt'))
 
 
 class cnf(torch.nn.Module):

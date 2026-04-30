@@ -6,6 +6,12 @@ EVAL:
     batch_size_train: 16               # batch size for training
     num_epoch: 100                  # number of epochs for training
     lr: 0.0001                      # learning rate for training
+    checkpoint_interval: 5          # save a full training checkpoint every N epochs
+    resume: False                   # resume from the latest checkpoint if True
+    resume_checkpoint: None         # explicit checkpoint path; overrides latest checkpoint lookup
+    amp: False                      # enable mixed precision training
+    amp_dtype: 'bf16'               # mixed precision dtype: bf16, fp16, or none
+    gradient_accumulation_steps: 1  # accumulate gradients for N mini-batches before optimizer step
     train: False                    # train the flow model if True
     lipschitz_constraint: None     # soft constraint on the spectral norm of the Jacobian
     finetune: False                 # finetuning of the model

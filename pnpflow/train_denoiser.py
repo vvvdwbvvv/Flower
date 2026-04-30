@@ -10,6 +10,14 @@ from matplotlib import pyplot as plt
 import os
 from torch.optim import Adam
 from torch.optim import lr_scheduler
+from pnpflow.training_utils import (
+    autocast_context,
+    checkpoint_path,
+    get_amp_settings,
+    load_training_checkpoint,
+    resolve_resume_checkpoint,
+    save_training_checkpoint,
+)
 
 
 class RunningPSNR:
@@ -191,9 +199,13 @@ class GRADIENT_STEP_DENOISER(object):
                                                eps=self.power_method_error_threshold)
         return lambda_estimate
 
-    def train_denoiser(self, train_loader, opt, num_epoch):
-        tq = tqdm(range(num_epoch), desc='loss')
+    def train_denoiser(self, train_loader, opt, num_epoch, start_epoch=0, global_step=0, scaler=None, scheduler=None):
+        amp_enabled, amp_dtype, _ = get_amp_settings(self.args, self.device)
+        grad_accum_steps = max(1, int(getattr(self.args, "gradient_accumulation_steps", 1)))
+        checkpoint_interval = max(1, int(getattr(self.args, "checkpoint_interval", 5)))
+        tq = tqdm(range(start_epoch, num_epoch), desc='loss')
         for ep in tq:
+            opt.zero_grad(set_to_none=True)
             for iteration, (y, labels) in enumerate(train_loader):
 
                 if y.size(0) == 0:
@@ -208,46 +220,73 @@ class GRADIENT_STEP_DENOISER(object):
                 sigma_chan = sigma * \
                     torch.ones(y.shape[0], 1, 1, 1, device=self.device)
 
-                x_hat, Dg = self.forward(x, sigma_chan.squeeze())
-                self.psnr.update(x_hat, y)
+                with autocast_context(amp_enabled, amp_dtype, self.device):
+                    x_hat, Dg = self.forward(x, sigma_chan.squeeze())
+                    criterion = nn.MSELoss(reduction='none')
+                    loss = criterion(
+                        x_hat.view(x.size()[0], -1), y.view(y.size()[0], -1)).mean(dim=1)
 
-                criterion = nn.MSELoss(reduction='none')
-                loss = criterion(
-                    x_hat.view(x.size()[0], -1), y.view(y.size()[0], -1)).mean(dim=1)
+                    if self.jacobian_loss_weight > 0:
+                        jacobian_norm = self.jacobian_spectral_norm(
+                            x, x_hat, sigma, interpolation=False, training=True)
+                        if self.jacobian_loss_type == 'max':
+                            jacobian_loss = torch.maximum(jacobian_norm, torch.ones_like(
+                                jacobian_norm)-self.eps_jacobian_loss)
+                        elif self.jacobian_loss_type == 'exp':
+                            jacobian_loss = self.eps_jacobian_loss * torch.exp(jacobian_norm - torch.ones_like(
+                                jacobian_norm)*(1+self.eps_jacobian_loss)) / self.eps_jacobian_loss
+                        else:
+                            print("jacobian loss not available")
+                        jacobian_loss = torch.clip(jacobian_loss, 0, 1e3)
+                        loss = (
+                            loss + self.jacobian_loss_weight * jacobian_loss)
 
-                if self.jacobian_loss_weight > 0:
-                    jacobian_norm = self.jacobian_spectral_norm(
-                        x, x_hat, sigma, interpolation=False, training=True)
-                    if self.jacobian_loss_type == 'max':
-                        jacobian_loss = torch.maximum(jacobian_norm, torch.ones_like(
-                            jacobian_norm)-self.eps_jacobian_loss)
-                    elif self.jacobian_loss_type == 'exp':
-                        jacobian_loss = self.eps_jacobian_loss * torch.exp(jacobian_norm - torch.ones_like(
-                            jacobian_norm)*(1+self.eps_jacobian_loss)) / self.eps_jacobian_loss
-                    else:
-                        print("jacobian loss not available")
-                    jacobian_loss = torch.clip(jacobian_loss, 0, 1e3)
-                    loss = (
-                        loss + self.jacobian_loss_weight * jacobian_loss)
-
-                loss = loss.mean()
+                    loss = loss.mean()
+                self.psnr.update(x_hat.detach().float(), y)
                 psnr = self.psnr.compute()
 
-                opt.zero_grad()
-                loss.backward()
-                opt.step()
+                loss_to_backward = loss / grad_accum_steps
+                if scaler is not None and scaler.is_enabled():
+                    scaler.scale(loss_to_backward).backward()
+                else:
+                    loss_to_backward.backward()
+
+                should_step = (
+                    (iteration + 1) % grad_accum_steps == 0
+                    or (iteration + 1) == len(train_loader)
+                )
+                if should_step:
+                    if scaler is not None and scaler.is_enabled():
+                        scaler.step(opt)
+                        scaler.update()
+                    else:
+                        opt.step()
+                    opt.zero_grad(set_to_none=True)
+                    global_step += 1
 
                 # save loss in txt file
                 with open(self.save_path + 'loss_training.txt', 'a') as file:
                     file.write(
                         f'Epoch: {ep}, iter: {iteration}, Loss: {loss.item()}\n')
 
-            if ep % 1 == 0:
+            if scheduler is not None:
+                scheduler.step()
 
+            if (ep + 1) % checkpoint_interval == 0 or (ep + 1) == num_epoch:
                 torch.save({
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': opt.state_dict(),
-                }, self.model_path + 'gradient_step_denoiser_{}.pt'.format(ep))
+                }, os.path.join(self.model_path, 'gradient_step_denoiser_{}.pt'.format(ep)))
+                save_training_checkpoint(
+                    checkpoint_path(self.model_path, ep),
+                    self.model,
+                    opt,
+                    ep,
+                    global_step,
+                    self.args,
+                    scaler=scaler,
+                    scheduler=scheduler,
+                )
 
                 with open(self.save_path + 'losses_gradient_step.txt', 'a') as file:
                     file.write(
@@ -255,22 +294,19 @@ class GRADIENT_STEP_DENOISER(object):
 
     def train(self, data_loaders):
 
-        self.save_path = self.args.root + \
-            'results/{}/{}'.format(
-                self.args.dataset, self.args.model)
+        self.save_path = os.path.join(
+            self.args.root, 'results', self.args.dataset, self.args.model) + os.sep
         try:
             os.makedirs(self.save_path)
         except BaseException:
             pass
 
-        self.model_path = self.args.root + \
-            'model/{}/{}'.format(
-                self.args.dataset, self.args.model)
+        self.model_path = os.path.join(
+            self.args.root, 'model', self.args.dataset, self.args.model) + os.sep
         try:
             os.makedirs(self.model_path)
         except BaseException:
             pass
-
         train_loader = data_loaders['train']
 
         # create txt file for storing all information about model
@@ -281,8 +317,36 @@ class GRADIENT_STEP_DENOISER(object):
             file.write(f'Number of epochs: {self.args.num_epoch}\n')
             file.write(f'Batch size: {self.args.batch_size_train}\n')
             file.write(f'Learning rate: {self.lr}\n')
+            file.write(f'Checkpoint interval: {getattr(self.args, "checkpoint_interval", 5)}\n')
+            file.write(f'Resume: {getattr(self.args, "resume", False)}\n')
+            file.write(f'AMP: {getattr(self.args, "amp", False)} ({getattr(self.args, "amp_dtype", "none")})\n')
+            file.write(f'Gradient accumulation steps: {getattr(self.args, "gradient_accumulation_steps", 1)}\n')
 
         [opt], [scheduler] = self.configure_optimizers()
-        self.train_denoiser(train_loader, opt, num_epoch=self.args.num_epoch)
+        _, _, scaler = get_amp_settings(self.args, self.device)
+        resume_path = resolve_resume_checkpoint(self.args, self.model_path)
+        start_epoch = 0
+        global_step = 0
+        if resume_path is not None:
+            checkpoint = load_training_checkpoint(
+                resume_path,
+                self.model,
+                optimizer=opt,
+                scaler=scaler,
+                scheduler=scheduler,
+                device=self.device,
+            )
+            start_epoch = int(checkpoint.get("epoch", -1)) + 1
+            global_step = int(checkpoint.get("global_step", 0))
+            print(f"Resumed training from {resume_path} at epoch {start_epoch}")
+        self.train_denoiser(
+            train_loader,
+            opt,
+            num_epoch=self.args.num_epoch,
+            start_epoch=start_epoch,
+            global_step=global_step,
+            scaler=scaler,
+            scheduler=scheduler,
+        )
         torch.save(self.model.state_dict(),
-                   self.model_path + 'gradient_step_denoiser_final.pt')
+                   os.path.join(self.model_path, 'gradient_step_denoiser_final.pt'))

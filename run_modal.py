@@ -130,6 +130,11 @@ def build_train_opts(
     num_epoch: int = DEFAULT_NUM_EPOCH,
     lr: float = DEFAULT_LR,
     device: str = DEFAULT_DEVICE,
+    checkpoint_interval: int = 5,
+    resume: bool = False,
+    amp: bool = False,
+    amp_dtype: str = "bf16",
+    gradient_accumulation_steps: int = 1,
     extra_opts: list[str] | None = None,
 ) -> list[str]:
     """Build the `--opts` list consumed by main.py."""
@@ -152,6 +157,16 @@ def build_train_opts(
         model,
         "device",
         device,
+        "checkpoint_interval",
+        str(checkpoint_interval),
+        "resume",
+        str(resume),
+        "amp",
+        str(amp),
+        "amp_dtype",
+        amp_dtype,
+        "gradient_accumulation_steps",
+        str(gradient_accumulation_steps),
     ]
     if extra_opts:
         opts.extend(extra_opts)
@@ -299,6 +314,11 @@ def main(
     num_epoch: int = DEFAULT_NUM_EPOCH,
     lr: float = DEFAULT_LR,
     device: str = DEFAULT_DEVICE,
+    checkpoint_interval: int = 5,
+    resume: bool = False,
+    amp: bool = False,
+    amp_dtype: str = "bf16",
+    gradient_accumulation_steps: int = 1,
     extra_opts: str = "",
     auto_download_data: bool = True,
 ):
@@ -311,6 +331,11 @@ def main(
         num_epoch=num_epoch,
         lr=lr,
         device=device,
+        checkpoint_interval=checkpoint_interval,
+        resume=resume,
+        amp=amp,
+        amp_dtype=amp_dtype,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         extra_opts=parsed_extra_opts,
     )
 

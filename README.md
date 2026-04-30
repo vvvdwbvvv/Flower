@@ -119,6 +119,18 @@ python main.py --opts dataset gopro train True eval False model ot batch_size_tr
 python main.py --opts dataset gopro eval True train False model ot problem denoising method pnp_flow eval_split test max_batch 8 batch_size_ip 4
 ```
 
+Training also supports resumable checkpoints, mixed precision, and gradient
+accumulation:
+
+```bash
+python main.py --opts dataset gopro train True eval False model ot batch_size_train 8 num_epoch 400 lr 0.0001 checkpoint_interval 5 resume True amp True amp_dtype bf16 gradient_accumulation_steps 2
+```
+
+Full checkpoints are saved under
+```model/<dataset>/<model>/checkpoints/``` and include model, optimizer, AMP
+scaler, epoch, and global step state. Set ```resume_checkpoint``` to load a
+specific checkpoint; otherwise ```resume True``` loads the newest checkpoint.
+
 The available methods are
   - ```flower``` (our method default with $\gamma = 0$)
   - ```flower_cov``` (our method with $\gamma = 1$)
